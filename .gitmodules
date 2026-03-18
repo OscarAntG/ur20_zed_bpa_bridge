@@ -1,0 +1,3 @@
+[submodule "bpa"]
+	path = bpa
+	url = https://github.com/bernhardmgruber/bpa
