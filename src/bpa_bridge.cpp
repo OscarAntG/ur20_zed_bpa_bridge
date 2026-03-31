@@ -1,9 +1,11 @@
 #include "rclcpp/rclcpp.hpp"
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <std_srvs/srv/trigger.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
+#include <pcl/filters/voxel_grid.h>
 #include <pcl/features/normal_3d.h>
 #include <glm/glm.hpp>
 #include "bpa.h"
@@ -16,13 +18,24 @@ public:
     BPABridgeNode() : Node("bpa_bridge") 
     {
         this->declare_parameter<double>("bpa_radius", 0.05);
+        accumulated_cloud_ = std::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>();
+
 
         mask_subscriber_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
             "isolated_mask_cloud", 10, std::bind(&BPABridgeNode::callbackBPABridge, this, _1));
         surface_publisher_ = this->create_publisher<visualization_msgs::msg::Marker>("mask_surface",10);
+        reset_surface_server_ = this->create_service<std_srvs::srv::Trigger>(
+            "reset_surface", std::bind(&BPABridgeNode::callbackResetSurface, this, _1,_2));
     }
 private:
+    bool surface_locked_ = false;
+    int current_frame_count_ = 0;
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr accumulated_cloud_;
+
     void callbackBPABridge(const sensor_msgs::msg::PointCloud2::SharedPtr message){
+        if(surface_locked_)
+            return;
+        
         pcl::PointCloud<pcl::PointXYZRGB>::Ptr mask_cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>();
         try{
             pcl::fromROSMsg(*message, *mask_cloud);
@@ -31,10 +44,32 @@ private:
             return;
         }
 
-        if(mask_cloud->empty()){
-            RCLCPP_WARN(this->get_logger(), "Received empty point cloud.");
-            return;
+        int valid_point_count = 0;
+        for (const auto& pt : mask_cloud->points) {
+            if (std::isfinite(pt.x))
+            valid_point_count++;
         }
+        if (valid_point_count < 500){
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000, 
+                "Waiting for SAM3 target... only %d points found.", valid_point_count);
+            return; 
+        }
+        
+        int target_frames = 10;
+        *accumulated_cloud_ += *mask_cloud;
+        current_frame_count_++;
+
+        RCLCPP_INFO(this->get_logger(), "Accumulating frame %d of %d", current_frame_count_, target_frames);
+        if (current_frame_count_ < target_frames)
+            return;
+        RCLCPP_INFO(this->get_logger(), "Finished collecting point cloud frames.");
+
+        pcl::VoxelGrid<pcl::PointXYZRGB> vg;
+        vg.setInputCloud(accumulated_cloud_);
+        vg.setLeafSize(0.01f, 0.01f, 0.01f);
+        vg.filter(*mask_cloud);
+
+        RCLCPP_INFO(this->get_logger(), "%d valid points, commencing surface reconstruction...", valid_point_count);
 
         pcl::NormalEstimation<pcl::PointXYZRGB, pcl::Normal> ne;
         pcl::search::KdTree<pcl::PointXYZRGB>::Ptr tree = std::make_shared<pcl::search::KdTree<pcl::PointXYZRGB>>();
@@ -86,10 +121,22 @@ private:
             marker.points.push_back(p3);
         }
         surface_publisher_->publish(marker);
+        surface_locked_ = true;
+    }
+
+    void callbackResetSurface(const std::shared_ptr<std_srvs::srv::Trigger::Request> request, const std::shared_ptr<std_srvs::srv::Trigger::Response> response){
+        (void)request;
+        accumulated_cloud_->clear();
+        current_frame_count_ = 0;
+        surface_locked_ = false;
+        response->success = true;
+        response->message = "Surface reset, ready for next snapshot!";
+        RCLCPP_INFO(this->get_logger(), "Resetting surface...");
     }
 
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr mask_subscriber_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr surface_publisher_;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_surface_server_;
 };
 int main(int argc, char **argv)
 {

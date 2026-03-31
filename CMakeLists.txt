@@ -10,9 +10,9 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(pcl_conversions REQUIRED)
-
 find_package(PCL REQUIRED COMPONENTS common io features search)
 
 add_subdirectory(third_party_git/bpa)
@@ -28,9 +28,11 @@ target_include_directories(bpa_bridge PUBLIC
 ament_target_dependencies(bpa_bridge
   rclcpp
   sensor_msgs
+  std_srvs
   visualization_msgs
   pcl_conversions
 )
+
 
 target_link_libraries(bpa_bridge
   ${PCL_LIBRARIES}
