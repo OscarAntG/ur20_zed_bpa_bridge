@@ -7,25 +7,31 @@
 #include <pcl/point_types.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/features/normal_3d.h>
+#include <moveit_msgs/msg/collision_object.hpp>
+#include <shape_msgs/msg/mesh.hpp>
+#include <shape_msgs/msg/mesh_triangle.hpp>
 #include <glm/glm.hpp>
 #include "bpa.h"
 
 using namespace std::placeholders;
 
-class BPABridgeNode : public rclcpp::Node 
+class BpaBridge : public rclcpp::Node 
 {
 public:
-    BPABridgeNode() : Node("bpa_bridge") 
+    BpaBridge() : Node("bpa_bridge") 
     {
+        rclcpp::QoS qos_profile(10);
+        qos_profile.transient_local();
+
         this->declare_parameter<double>("bpa_radius", 0.05);
         accumulated_cloud_ = std::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>();
 
-
         mask_subscriber_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-            "isolated_mask_cloud", 10, std::bind(&BPABridgeNode::callbackBPABridge, this, _1));
-        surface_publisher_ = this->create_publisher<visualization_msgs::msg::Marker>("mask_surface",10);
+            "isolated_mask_cloud", 10, std::bind(&BpaBridge::callbackBPABridge, this, _1));
+        surface_marker_publisher_ = this->create_publisher<visualization_msgs::msg::Marker>("mask_marker_surface", 10);
+        surface_collision_publisher_ = this->create_publisher<moveit_msgs::msg::CollisionObject>("collision_object", qos_profile);
         reset_surface_server_ = this->create_service<std_srvs::srv::Trigger>(
-            "reset_surface", std::bind(&BPABridgeNode::callbackResetSurface, this, _1,_2));
+            "reset_surface", std::bind(&BpaBridge::callbackResetSurface, this, _1,_2));
     }
 private:
     bool surface_locked_ = false;
@@ -49,7 +55,7 @@ private:
             if (std::isfinite(pt.x))
             valid_point_count++;
         }
-        if (valid_point_count < 500){
+        if (valid_point_count < 50){
             RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000, 
                 "Waiting for SAM3 target... only %d points found.", valid_point_count);
             return; 
@@ -100,16 +106,23 @@ private:
         visualization_msgs::msg::Marker marker;
         marker.header.frame_id = message->header.frame_id;
         marker.header.stamp = message->header.stamp;
-        marker.ns = "bpa_surface";
+        marker.ns = "waste_surface_marker";
         marker.id = 0;
         marker.type = visualization_msgs::msg::Marker::TRIANGLE_LIST;
         marker.action = visualization_msgs::msg::Marker::ADD;
-
         marker.scale.x = 1.0; marker.scale.y = 1.0; marker.scale.z = 1.0; 
-
         marker.color.r = 0.0f; marker.color.g = 0.8f; marker.color.b = 0.2f; marker.color.a = 1.0f;
+        
+        moveit_msgs::msg::CollisionObject collision_object;
+        collision_object.header.frame_id = message->header.frame_id;
+        collision_object.header.stamp = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
+        collision_object.id = "mask_collision_surface";
+        collision_object.operation = collision_object.ADD;
+        shape_msgs::msg::Mesh mesh;
+        int vertex_index = 0;
 
         for (const auto& tri: triangles) {
+            shape_msgs::msg::MeshTriangle triangle_indices;
             geometry_msgs::msg::Point p1, p2, p3;
 
             p1.x = tri[0].x; p1.y = tri[0].y; p1.z = tri[0].z;
@@ -119,8 +132,22 @@ private:
             marker.points.push_back(p1);
             marker.points.push_back(p2);
             marker.points.push_back(p3);
+
+            mesh.vertices.push_back(p1);
+            mesh.vertices.push_back(p2);
+            mesh.vertices.push_back(p3);
+            triangle_indices.vertex_indices[0] = vertex_index++;
+            triangle_indices.vertex_indices[1] = vertex_index++;
+            triangle_indices.vertex_indices[2] = vertex_index++;
+            mesh.triangles.push_back(triangle_indices);
         }
-        surface_publisher_->publish(marker);
+        collision_object.meshes.push_back(mesh);
+        geometry_msgs::msg::Pose pose;
+        pose.orientation.w = 1.0;
+        collision_object.mesh_poses.push_back(pose);
+
+        surface_marker_publisher_->publish(marker);
+        surface_collision_publisher_->publish(collision_object);
         surface_locked_ = true;
     }
 
@@ -135,13 +162,14 @@ private:
     }
 
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr mask_subscriber_;
-    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr surface_publisher_;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr surface_marker_publisher_;
+    rclcpp::Publisher<moveit_msgs::msg::CollisionObject>::SharedPtr surface_collision_publisher_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_surface_server_;
 };
 int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
-    auto node = std::make_shared<BPABridgeNode>(); 
+    auto node = std::make_shared<BpaBridge>(); 
     rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;
