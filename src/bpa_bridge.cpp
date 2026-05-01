@@ -20,7 +20,7 @@ class BpaBridge : public rclcpp::Node
 public:
     BpaBridge() : Node("bpa_bridge") 
     {
-        rclcpp::QoS qos_profile(10);
+        rclcpp::QoS qos_profile(1);
         qos_profile.transient_local();
 
         this->declare_parameter<double>("bpa_radius", 0.05);

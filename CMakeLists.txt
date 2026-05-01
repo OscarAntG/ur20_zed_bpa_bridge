@@ -19,11 +19,14 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(PCL REQUIRED COMPONENTS common io features search filters segmentation sample_consensus)
+find_package(noether_tpp REQUIRED)
+# find_package(VTK REQUIRED COMPONENTS CommonCore CommonDataModel)
 
 add_subdirectory(third_party_git/bpa)
 
 add_executable(bpa_bridge src/bpa_bridge.cpp)
 add_executable(noether_surface_fitting src/noether_surface_fitting.cpp)
+add_executable(noether_toolpath_generator src/noether_toolpath_generator.cpp)
 
 target_include_directories(bpa_bridge PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -34,6 +37,12 @@ target_include_directories(noether_surface_fitting PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
   ${PCL_INCLUDE_DIRS}
+)
+
+target_include_directories(noether_toolpath_generator PUBLIC
+  # ${VTK_INCLUDE_DIRS}
+  ${PCL_INCLUDE_DIRS}
+  ${noether_tpp_INCLUDE_DIRS}
 )
 
 ament_target_dependencies(bpa_bridge
@@ -58,12 +67,24 @@ ament_target_dependencies(noether_surface_fitting
   pcl_conversions
 )
 
+ament_target_dependencies(noether_toolpath_generator
+  rclcpp
+  shape_msgs
+  geometry_msgs
+  moveit_msgs
+  tf2
+  pcl_conversions
+)
+
 target_link_libraries(bpa_bridge ${PCL_LIBRARIES} libbpa)
 target_link_libraries(noether_surface_fitting ${PCL_LIBRARIES})
+# target_link_libraries(noether_toolpath_generator ${VTK_LIBRARIES} noether::noether_tpp)
+target_link_libraries(noether_toolpath_generator ${PCL_LIBRARIES} noether::noether_tpp)
 
 install(TARGETS 
   bpa_bridge 
   noether_surface_fitting
+  noether_toolpath_generator
   DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
